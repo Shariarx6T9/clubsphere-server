@@ -194,4 +194,116 @@ router.get('/manager/my-events', verifyToken, requireRole(['clubManager']), asyn
   }
 });
 
+// Register for event (Members only)
+router.post('/:id/register', verifyToken, requireRole(['member']), async (req, res) => {
+  try {
+    const event = await Event.findById(req.params.id).populate('clubId');
+    
+    if (!event) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+    
+    // Check if event is in the past
+    if (new Date(event.eventDate) < new Date()) {
+      return res.status(400).json({ message: 'Cannot register for past events' });
+    }
+    
+    // Check if event is full
+    if (event.maxAttendees) {
+      const currentRegistrations = await EventRegistration.countDocuments({ 
+        eventId: req.params.id, 
+        status: 'registered' 
+      });
+      
+      if (currentRegistrations >= event.maxAttendees) {
+        return res.status(400).json({ message: 'Event is full' });
+      }
+    }
+    
+    // Check if user is already registered
+    const existingRegistration = await EventRegistration.findOne({
+      eventId: req.params.id,
+      userEmail: req.user.email
+    });
+    
+    if (existingRegistration) {
+      return res.status(400).json({ message: 'You are already registered for this event' });
+    }
+    
+    // Create registration
+    const registration = new EventRegistration({
+      eventId: req.params.id,
+      userEmail: req.user.email,
+      clubId: event.clubId._id
+    });
+    
+    await registration.save();
+    
+    // Update event's current attendees count
+    const newCount = await EventRegistration.countDocuments({ 
+      eventId: req.params.id, 
+      status: 'registered' 
+    });
+    
+    await Event.findByIdAndUpdate(req.params.id, { 
+      currentAttendees: newCount 
+    });
+    
+    res.status(201).json({
+      message: 'Successfully registered for event',
+      registration
+    });
+  } catch (error) {
+    console.error('Event registration error:', error);
+    res.status(500).json({ message: 'Failed to register for event' });
+  }
+});
+
+// Unregister from event (Members only)
+router.delete('/:id/register', verifyToken, requireRole(['member']), async (req, res) => {
+  try {
+    const registration = await EventRegistration.findOne({
+      eventId: req.params.id,
+      userEmail: req.user.email
+    });
+    
+    if (!registration) {
+      return res.status(404).json({ message: 'Registration not found' });
+    }
+    
+    await EventRegistration.findByIdAndDelete(registration._id);
+    
+    // Update event's current attendees count
+    const newCount = await EventRegistration.countDocuments({ 
+      eventId: req.params.id, 
+      status: 'registered' 
+    });
+    
+    await Event.findByIdAndUpdate(req.params.id, { 
+      currentAttendees: newCount 
+    });
+    
+    res.json({ message: 'Successfully unregistered from event' });
+  } catch (error) {
+    console.error('Event unregistration error:', error);
+    res.status(500).json({ message: 'Failed to unregister from event' });
+  }
+});
+
+// Check registration status for event
+router.get('/:id/registration-status', verifyToken, async (req, res) => {
+  try {
+    const registration = await EventRegistration.findOne({
+      eventId: req.params.id,
+      userEmail: req.user.email,
+      status: 'registered'
+    });
+    
+    res.json(registration);
+  } catch (error) {
+    console.error('Check registration status error:', error);
+    res.status(500).json({ message: 'Failed to check registration status' });
+  }
+});
+
 module.exports = router;
